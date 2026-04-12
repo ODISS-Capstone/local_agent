@@ -1,0 +1,82 @@
+ flowchart TD
+    %% 가정 내 물리적 환경
+    subgraph Home_Environment [가정 내 환경: 홈캠 및 스피커]
+        User((어르신 사용자))
+        Cam[홈캠 RTSP 스트리밍]
+        Speaker[홈 스피커 / 캠 내장 스피커]
+    end
+
+    %% 로컬 엣지 노드 (경량 처리 및 하드웨어 제어)
+    subgraph Edge_Node [로컬 에이전트:  실시간 UX 및 데이터 인식]
+        direction TB
+        VAD[Wake-word 엔진]
+        STT[스트리밍 STT 모델: Whisper]
+        TTS[대화형 TTS 모델: Qwen3-TTS]
+        subgraph Capture_Mode [가이드 촬영 모드]
+            Buffer[RTSP 프레임 버퍼링]
+            Timer[촬영 타이머: 하나 둘 셋 찰칵]
+            OCR_Engine[GLM-OCR: 텍스트 추출]
+        end
+		    subgraph Dialogue_Manager [대화 상태 제어]
+            State1((대화 대기))
+            State3((촬영 대기))
+        end
+        Wait_UX[**고정 멘트 엔진**]
+    end
+
+    %% 클라우드 AI 서버 (정밀 분석 및 추론)
+    subgraph Cloud_Server [클라우드 AI 서버: ODISS 에이전트]
+        direction TB
+  
+
+        %% 처방전 인식 전용 메소드/모듈
+        subgraph Prescription_Recognition [**처방전 정밀 분석 메소드**]
+            direction TB
+            Drug_Parser[약물 정보 파싱: 명칭/용법/일수]
+            Instruction_Log[STT 환자 지시 로그 수집]
+            
+            OCR_Engine  --성공 시 OCR 전송--> Drug_Parser
+            OCR_Engine  --실패 시 재요청--> Wait_UX-->TTS-- 어르신 약봉투를 다시 들어주시겠어요? -->Speaker
+        end
+        
+        DB[(환자 통합 MD파일 DB)]
+    end
+
+    %% --- 흐름 연결 (1~8단계) ---
+
+    %% 1~2. 호출 및 초기 응답
+    User -- "오디스야/오디스~/저기/얘야/오디/어디스..." --> STT --> VAD
+    STT --> VAD --> Wait_UX--> TTS -- "즉시 응답 (ex: 네 어르신 말씀해주세요!)" --> Speaker
+
+    STT--> Instruction_Log
+    %% 클라우드 서버 요청
+    
+    Cloud_Server -- "주기적 처방 레포트 요청" --> State3
+    User -- " 약 가져왔어" --> STT
+
+    %% 6. 촬영 및 로컬 지연 멘트 (핵심 수정 부분)
+    State3 -- "촬영 실행" --> Buffer-->Timer-->TTS-->Speaker
+    Timer-->OCR_Engine
+    VAD --> State1 --> STT
+    
+    Wait_UX --> TTS-- "고정 멘트: '오디스가 생각하고 있어요.\n잠시만 기다려 주세요~'" --> Speaker
+
+
+    %% 7-3. 처방전 분석 프로세스 (모델의 '생각' 시간)
+    Drug_Parser --> DB
+    Instruction_Log --> DB
+    
+    Cam --"RTSP 통신 지원"--> Capture_Mode 
+    Cloud_Server--"실시간 응답"-->TTS--"에이전트: 어르신, XX약은 녹용이랑 드시면 안되요~"-->Speaker
+    TTS -- "이번 약은 혈압약과 같이\n드시면 안 돼요. 식후에 드세요!" --> Speaker
+    Speaker <-->User <-->Cam
+    %% 스타일링
+    classDef env fill:#f0f4f8,stroke:#2c3e50,stroke-width:2px;
+    classDef edge fill:#fff9db,stroke:#f08c00,stroke-width:2px;
+    classDef cloud fill:#e3f2fd,stroke:#1976d2,stroke-width:2px;
+    classDef highlight fill:#f3e5f5,stroke:#7b1fa2,stroke-width:2px,stroke-dasharray: 5 5;
+    
+    class Home_Environment env;
+    class Edge_Node edge;
+    class Cloud_Server cloud;
+    class Prescription_Recognition highlight;

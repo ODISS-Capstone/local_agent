@@ -1,0 +1,35 @@
+rtsp:
+  url: "rtsp://192.168.0.100:554/stream"
+  buffer_size: 30
+  reconnect_backoff_sec: 2.0
+  max_reconnect_attempts: 10
+
+quality:
+  blur_threshold: 100.0
+  brightness_min: 50
+  brightness_max: 230
+  glare_max_ratio: 0.15
+
+capture:
+  timer_seconds: 3
+  bestshot_weights:
+    sharpness: 0.5
+    brightness: 0.3
+    contrast: 0.2
+
+ocr:
+  model_path: "models/glm-ocr"
+  confidence_threshold: 0.85
+  fuzzy_match_max_distance: 2
+  medical_dict_path: "config/medical_terms.json"
+
+cloud:
+  endpoint: "https://api.odiss.example.com"
+  drug_parser_path: "/v1/perception/ocr"
+  instruction_log_path: "/v1/perception/stt-log"
+  timeout_sec: 10.0
+  retry_count: 3
+  retry_backoff_sec: 1.0
+
+wait_ux:
+  waiting_escalation_intervals_sec: [3, 7, 15]
