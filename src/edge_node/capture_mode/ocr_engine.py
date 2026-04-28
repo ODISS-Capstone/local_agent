@@ -159,6 +159,26 @@ class OCREngine:
             logger.warning(
                 "GLM-OCR 모델 경로 없음: %s (스텁 모드로 동작)", model_path
             )
+        self._apply_turboquant_wrap()
+
+    def _apply_turboquant_wrap(self) -> None:
+        """Wrap the loaded HF model (if any) with TurboQuant compressed KV.
+
+        Looks for a ``self._model`` / ``self._glm_model`` attribute that a
+        concrete subclass may have populated; no-ops otherwise.  Keeps the
+        stubbed path silent on CPU-only dev hosts.
+        """
+        try:
+            from src.runtime.turboquant_runtime import wrap
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("TurboQuant runtime unavailable: %s", exc)
+            return
+
+        for attr in ("_model", "_glm_model", "model"):
+            model = getattr(self, attr, None)
+            if model is None:
+                continue
+            setattr(self, attr, wrap(model))
 
     async def process(self, frame: np.ndarray) -> OCRResult:
         """Timer -> OCR_Engine: 프레임을 받아 OCR 처리를 수행한다.

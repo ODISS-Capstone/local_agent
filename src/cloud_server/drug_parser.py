@@ -26,11 +26,59 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class DrugParserConfig:
-    endpoint: str = "https://api.odiss.example.com"
-    path: str = "/v1/perception/ocr"
+    endpoint: str = "http://localhost:8000"
+    path: str = "/api/ocr/analyze"
     timeout_sec: float = 10.0
     retry_count: int = 3
     retry_backoff_sec: float = 1.0
+
+
+def _to_server_ocr_payload(agent_payload: dict[str, Any]) -> dict[str, Any]:
+    """Translate ``OCRResult.to_dict()`` output into the ai-server contract.
+
+    The ai-server ``POST /api/ocr/analyze`` endpoint expects a flat schema::
+
+        {
+          "raw_text": str,
+          "medications": [{"name": str, "strength": str?, "dosage": str?,
+                           "frequency": str?, "timing": str?}, ...],
+          "confidence": float,
+          "speaker_id": str | None
+        }
+
+    The local agent's :class:`OCRResult` uses a nested structure, so this
+    function normalises it.
+    """
+    ocr_results = agent_payload.get("ocr_results") or {}
+    text = ocr_results.get("text", agent_payload.get("text", ""))
+    confidence = float(
+        ocr_results.get(
+            "text_confidence_score",
+            agent_payload.get("text_confidence_score", 0.0),
+        )
+    )
+
+    structured = ocr_results.get("structured_data") or agent_payload.get("structured_data") or {}
+    raw_meds = structured.get("drugs") or []
+
+    medications: list[dict[str, Any]] = []
+    for drug in raw_meds:
+        medications.append(
+            {
+                "name": drug.get("name", ""),
+                "strength": drug.get("dosage") or None,
+                "dosage": drug.get("dosage") or None,
+                "frequency": drug.get("frequency") or None,
+                "timing": drug.get("timing") or None,
+            }
+        )
+
+    return {
+        "raw_text": text,
+        "medications": medications,
+        "confidence": confidence,
+        "speaker_id": agent_payload.get("speaker_id"),
+    }
 
 
 class DrugParserClient(ABC):
@@ -70,9 +118,11 @@ class HttpDrugParserClient(DrugParserClient):
         url = f"{self._config.endpoint}{self._config.path}"
         backoff = self._config.retry_backoff_sec
 
+        server_payload = _to_server_ocr_payload(payload)
+
         for attempt in range(1, self._config.retry_count + 1):
             try:
-                async with self._session.post(url, json=payload) as resp:
+                async with self._session.post(url, json=server_payload) as resp:
                     if resp.status == 200:
                         data = await resp.json()
                         logger.info("Drug_Parser 전송 성공: %s", resp.status)

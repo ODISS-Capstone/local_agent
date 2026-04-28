@@ -1,0 +1,235 @@
+name: local_agent Jetson Deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_jetson_smoke:
+        description: "Run hardware smoke checks on the Jetson self-hosted runner"
+        required: false
+        default: true
+        type: boolean
+      deploy_staging:
+        description: "Deploy package to the Jetson staging device over SSH"
+        required: false
+        default: false
+        type: boolean
+      turboquant_wheel_url:
+        description: "Optional TurboQuantWrapper Jetson wheel URL"
+        required: false
+        default: ""
+        type: string
+      run_turboquant_wrap:
+        description: "Run GLM-OCR + Qwen3-TTS + whisper-small TurboQuant wrapping smoke on a CUDA workstation"
+        required: false
+        default: false
+        type: boolean
+      turboquant_wrapper_ref:
+        description: "Git ref of TurboQuantWrapper to use for wrapping smoke"
+        required: false
+        default: "main"
+        type: string
+      wrap_targets:
+        description: "Space-separated edge wrap targets"
+        required: false
+        default: "glm-ocr qwen3-tts whisper-small"
+        type: string
+
+jobs:
+  package:
+    name: Package local agent
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Create deploy package
+        run: |
+          tar \
+            --exclude='.git' \
+            --exclude='.github' \
+            --exclude='__pycache__' \
+            -czf local-agent-${{ github.sha }}.tar.gz .
+
+      - name: Upload deploy package
+        uses: actions/upload-artifact@v4
+        with:
+          name: local-agent-package
+          path: local-agent-${{ github.sha }}.tar.gz
+
+  jetson-smoke:
+    name: Jetson hardware smoke
+    if: ${{ inputs.run_jetson_smoke }}
+    runs-on: [self-hosted, linux, arm64, jetson-nano, l4t]
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install local agent
+        run: |
+          python3 -m pip install --upgrade pip
+          python3 -m pip install -e ".[dev]"
+          if [ -n "${{ inputs.turboquant_wheel_url }}" ]; then
+            python3 -m pip install "${{ inputs.turboquant_wheel_url }}"
+          fi
+
+      - name: Check Jetson runtime dependencies
+        run: |
+          python3 - <<'PY'
+          import importlib.util
+          import json
+          import platform
+          import subprocess
+
+          import cv2
+
+          def has_module(name: str) -> bool:
+              return importlib.util.find_spec(name) is not None
+
+          report = {
+              "machine": platform.machine(),
+              "opencv": cv2.__version__,
+              "pycuda": has_module("pycuda"),
+              "tensorrt": has_module("tensorrt"),
+              "turboquant": has_module("turboquant"),
+          }
+          with open("jetson-agent-runtime-report.json", "w", encoding="utf-8") as f:
+              json.dump(report, f, indent=2)
+          assert report["pycuda"], "pycuda is required on the Jetson runner"
+          assert report["tensorrt"], "TensorRT Python runtime is required on the Jetson runner"
+
+          subprocess.run(["gst-inspect-1.0", "rtspsrc"], check=True)
+          subprocess.run(["gst-inspect-1.0", "appsink"], check=True)
+          PY
+
+      - name: Run local agent mock smoke
+        run: |
+          python3 - <<'PY'
+          import asyncio
+          from src.edge_node.stt import StubSTT
+          from src.edge_node.tts import StubTTS, TTSPriority
+          from src.edge_node.wait_ux import WaitUX
+
+          async def main():
+              stt = StubSTT()
+              await stt.simulate_input("약 가져왔어")
+              result = await stt.get_transcription()
+              assert "약" in result.text
+
+              tts = StubTTS()
+              await tts.speak("오디스가 생각하고 있어요.", TTSPriority.NORMAL)
+
+              wait_ux = WaitUX()
+              q = asyncio.Queue()
+              wait_ux.set_tts_queue(q)
+              await wait_ux.retry_request()
+              assert await q.get()
+
+          asyncio.run(main())
+          PY
+
+      - name: Upload Jetson runtime report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: local-agent-jetson-runtime-report
+          path: jetson-agent-runtime-report.json
+
+  turboquant-wrap:
+    name: Edge model TurboQuant wrapping smoke
+    if: ${{ inputs.run_turboquant_wrap }}
+    runs-on: [self-hosted, linux, x64, nvidia, cuda]
+    env:
+      HF_HUB_DISABLE_TELEMETRY: "1"
+      TRANSFORMERS_VERBOSITY: "error"
+    steps:
+      - name: Check out local_agent
+        uses: actions/checkout@v4
+
+      - name: Check out TurboQuantWrapper
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository_owner }}/TurboQuantWrapper
+          ref: ${{ inputs.turboquant_wrapper_ref }}
+          path: TurboQuantWrapper
+          token: ${{ secrets.TURBOQUANT_REPO_TOKEN || secrets.GITHUB_TOKEN }}
+
+      - name: Install HF and TurboQuant dependencies
+        run: |
+          python3 -m pip install --upgrade pip
+          python3 -m pip install \
+            "transformers>=4.44.0" \
+            "accelerate>=0.30.0" \
+            "sentencepiece" \
+            "soundfile" \
+            "pillow"
+          python3 -m pip install -e ./TurboQuantWrapper
+
+      - name: Run edge model wrapping smoke
+        env:
+          HUGGING_FACE_HUB_TOKEN: ${{ secrets.HUGGING_FACE_HUB_TOKEN }}
+        run: |
+          python3 TurboQuantWrapper/scripts/test_turboquant_wrapping.py \
+            --targets ${{ inputs.wrap_targets }} \
+            --report local-agent-turboquant-wrap.json
+
+      - name: Upload wrapping report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: local-agent-turboquant-wrap-report
+          path: local-agent-turboquant-wrap.json
+
+  deploy-staging:
+    name: Deploy to Jetson staging
+    runs-on: ubuntu-latest
+    needs: [package]
+    if: ${{ inputs.deploy_staging }}
+    environment: jetson-staging
+    env:
+      JETSON_STAGING_HOST: ${{ secrets.JETSON_STAGING_HOST }}
+    steps:
+      - name: Download deploy package
+        uses: actions/download-artifact@v4
+        with:
+          name: local-agent-package
+          path: .
+
+      - name: Copy package to Jetson
+        if: ${{ env.JETSON_STAGING_HOST != '' }}
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.JETSON_STAGING_HOST }}
+          username: ${{ secrets.JETSON_STAGING_USER }}
+          key: ${{ secrets.JETSON_STAGING_SSH_KEY }}
+          source: local-agent-${{ github.sha }}.tar.gz
+          target: /tmp
+
+      - name: Install and restart staging service
+        if: ${{ env.JETSON_STAGING_HOST != '' }}
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.JETSON_STAGING_HOST }}
+          username: ${{ secrets.JETSON_STAGING_USER }}
+          key: ${{ secrets.JETSON_STAGING_SSH_KEY }}
+          script: |
+            set -eu
+            sudo mkdir -p /opt/odiss/local_agent
+            sudo tar -xzf /tmp/local-agent-${{ github.sha }}.tar.gz -C /opt/odiss/local_agent
+            cd /opt/odiss/local_agent
+            python3.10 -m venv .venv
+            . .venv/bin/activate
+            pip install --upgrade pip
+            pip install -e ".[dev]"
+            if [ -f /opt/odiss/agent_config.yaml ]; then
+              cp /opt/odiss/agent_config.yaml config/agent_config.yaml
+            fi
+            sudo cp systemd/odiss-agent.service /etc/systemd/system/odiss-agent.service
+            sudo systemctl daemon-reload
+            sudo systemctl enable odiss-agent
+            sudo systemctl restart odiss-agent
+            sleep 5
+            sudo systemctl --no-pager --full status odiss-agent
+
+      - name: Skip notice
+        if: ${{ env.JETSON_STAGING_HOST == '' }}
+        run: echo "JETSON_STAGING_HOST is not configured; deployment skipped."

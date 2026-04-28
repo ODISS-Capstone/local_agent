@@ -1,0 +1,22 @@
+[Unit]
+Description=ODISS Local OCR Agent
+After=network-online.target sound.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=odiss
+Group=odiss
+WorkingDirectory=/opt/odiss/local_agent
+EnvironmentFile=-/opt/odiss/local_agent.env
+Environment=PYTHONUNBUFFERED=1
+Environment=TURBOQUANT_AUTO_WRAP=1
+Environment=TURBOQUANT_KEY_BITS=3
+Environment=TURBOQUANT_VALUE_BITS=3
+Environment=TURBOQUANT_COMPRESS_VALUES=0
+ExecStart=/opt/odiss/local_agent/.venv/bin/python -m src.main
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

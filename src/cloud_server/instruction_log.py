@@ -40,11 +40,12 @@ class InstructionEntry:
 
 @dataclass
 class InstructionLogConfig:
-    endpoint: str = "https://api.odiss.example.com"
-    path: str = "/v1/perception/stt-log"
+    endpoint: str = "http://localhost:8000"
+    path: str = "/api/stt/log"
     timeout_sec: float = 10.0
     retry_count: int = 3
     retry_backoff_sec: float = 1.0
+    speaker_id: str | None = None
 
 
 class InstructionLogClient(ABC):
@@ -80,9 +81,13 @@ class HttpInstructionLogClient(InstructionLogClient):
         url = f"{self._config.endpoint}{self._config.path}"
         backoff = self._config.retry_backoff_sec
 
+        payload = entry.to_dict()
+        if self._config.speaker_id is not None:
+            payload["speaker_id"] = self._config.speaker_id
+
         for attempt in range(1, self._config.retry_count + 1):
             try:
-                async with self._session.post(url, json=entry.to_dict()) as resp:
+                async with self._session.post(url, json=payload) as resp:
                     if resp.status == 200:
                         logger.info("Instruction_Log 전송 성공")
                         return True

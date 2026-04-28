@@ -24,12 +24,20 @@ ocr:
   medical_dict_path: "config/medical_terms.json"
 
 cloud:
-  endpoint: "https://api.odiss.example.com"
-  drug_parser_path: "/v1/perception/ocr"
-  instruction_log_path: "/v1/perception/stt-log"
+  endpoint: "http://localhost:8000"
+  drug_parser_path: "/api/ocr/analyze"
+  instruction_log_path: "/api/stt/log"
+  websocket_path: "/ws/chat"
   timeout_sec: 10.0
   retry_count: 3
   retry_backoff_sec: 1.0
 
 wait_ux:
   waiting_escalation_intervals_sec: [3, 7, 15]
+
+turboquant:
+  auto_wrap: true
+  key_bits: 3
+  value_bits: 3
+  compress_values: false
+  require_cuda: false

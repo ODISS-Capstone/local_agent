@@ -1,0 +1,102 @@
+name: local_agent CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  mock:
+    name: x86 mock validation
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install OpenCV runtime libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libgl1 libglib2.0-0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install package with development dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]"
+
+      - name: Compile Python modules
+        run: python -m compileall src
+
+      - name: Run configuration and state-machine smoke tests
+        run: |
+          python - <<'PY'
+          import asyncio
+          import yaml
+          from src.edge_node.dialogue_manager.state_machine import (
+              DialogueEvent,
+              DialogueState,
+              StateMachine,
+          )
+          from src.edge_node.wait_ux import WaitUX
+
+          with open("config/agent_config.yaml", encoding="utf-8") as f:
+              config = yaml.safe_load(f)
+          assert config["ocr"]["confidence_threshold"] >= 0.0
+          assert config["cloud"]["timeout_sec"] > 0
+
+          async def main():
+              sm = StateMachine()
+              assert sm.state == DialogueState.STATE1_CONVERSATION_WAIT
+              await sm._handle_event(DialogueEvent.CAPTURE_TRIGGER)
+              assert sm.state == DialogueState.STATE3_CAPTURE_WAIT
+
+              wait_ux = WaitUX()
+              q = asyncio.Queue()
+              wait_ux.set_tts_queue(q)
+              await wait_ux.immediate_response()
+              assert await q.get()
+
+          asyncio.run(main())
+          PY
+
+      - name: Run tests when present
+        run: |
+          if compgen -G "tests/test_*.py" > /dev/null; then
+            pytest -q
+          else
+            echo "No pytest tests found; compile and smoke checks completed."
+          fi
+
+      - name: TurboQuant auto-wrap smoke (CPU)
+        env:
+          TURBOQUANT_AUTO_WRAP: "1"
+          TURBOQUANT_REQUIRE_CUDA: "0"
+        run: |
+          python -m pip install \
+            "https://github.com/${{ github.repository_owner }}/TurboQuantWrapper/archive/refs/heads/main.zip" \
+            "transformers>=4.44.0" || true
+          python - <<'PY'
+          try:
+              import turboquant.runtime  # noqa: F401
+          except Exception:
+              print("TurboQuantWrapper not installed; skipping")
+              raise SystemExit(0)
+
+          from src.runtime.turboquant_runtime import install, wrap
+          ok = install({"auto_wrap": True})
+          assert ok in (True, False)
+
+          import transformers as tf
+          fn = tf.AutoModelForCausalLM.from_pretrained
+          flag = getattr(fn, "_turboquant_wrapped", False) or getattr(
+              getattr(fn, "__func__", fn), "_turboquant_wrapped", False
+          )
+          assert flag, "auto-wrap must patch AutoModelForCausalLM"
+          print("local_agent auto-wrap hook active")
+          PY

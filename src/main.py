@@ -50,6 +50,7 @@ from src.edge_node.dialogue_manager.state_machine import (
 )
 from src.cloud_server.drug_parser import StubDrugParserClient
 from src.cloud_server.instruction_log import StubInstructionLogClient, InstructionEntry
+from src.runtime import turboquant_runtime
 
 logger = logging.getLogger(__name__)
 
@@ -73,6 +74,8 @@ class LocalAgent:
 
     def __init__(self, config: dict[str, Any] | None = None) -> None:
         cfg = config or load_config()
+
+        turboquant_runtime.install(cfg.get("turboquant"))
 
         # --- Home_Environment 노드 ---
         rtsp_cfg = cfg.get("rtsp", {})
