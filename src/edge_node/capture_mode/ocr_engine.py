@@ -581,10 +581,6 @@ class OCREngine:
         if not text:
             logger.warning("Gemini OCR 결과가 비어 있음")
             return [], []
-        if self._is_repetitive_text(text):
-            logger.warning("Gemini OCR 반복 출력 감지, 실패 처리: %s", text[:120])
-            return [], []
-
         lines = [line.strip() for line in text.splitlines() if line.strip()]
         if not lines:
             lines = [text]
