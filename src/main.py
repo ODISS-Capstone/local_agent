@@ -152,8 +152,9 @@ class LocalAgent:
 
         ocr_cfg = cfg.get("ocr", {})
         self.ocr_engine = OCREngine(OCREngineConfig(
-            model_path=ocr_cfg.get("model_path", "models/glm-ocr"),
-            provider=ocr_cfg.get("provider", "stub"),
+            model_path=ocr_cfg.get("model_path", ""),
+            provider=ocr_cfg.get("provider", "gemini_ocr"),
+            save_dir=ocr_cfg.get("save_dir", ocr_cfg.get("glmocr_save_dir", "runtime/ocr")),
             hf_device=ocr_cfg.get("hf_device", "auto"),
             hf_torch_dtype=ocr_cfg.get("hf_torch_dtype", "auto"),
             hf_prompt=ocr_cfg.get("hf_prompt", "Text Recognition:"),

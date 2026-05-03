@@ -1,5 +1,5 @@
 """
-OCR_Engine [GLM-OCR: 텍스트 추출]
+OCR_Engine [Gemini OCR: 텍스트 추출]
 
 mermaid 노드: OCR_Engine
 mermaid 엣지:
@@ -90,8 +90,9 @@ class OCRResult:
 
 @dataclass
 class OCREngineConfig:
-    model_path: str = "models/glm-ocr"
-    provider: str = "stub"
+    model_path: str = ""
+    provider: str = "gemini_ocr"
+    save_dir: str = "runtime/ocr"
     hf_device: str = "auto"
     hf_torch_dtype: str = "auto"
     hf_prompt: str = "Text Recognition:"
@@ -143,7 +144,7 @@ COLOR_RANGES_HSV = {
 
 
 class OCREngine:
-    """GLM-OCR 기반 텍스트 추출 엔진.
+    """Gemini OCR 기반 텍스트 추출 엔진.
 
     ROI 분류, 모드별 파싱, 신뢰도 검증, 의학사전 매칭을
     하나의 노드 안에서 수행한다.
@@ -156,6 +157,7 @@ class OCREngine:
         self._glmocr_parser: Any | None = None
         self._hf_processor: Any | None = None
         self._hf_model: Any | None = None
+        self._gemini_client: Any | None = None
         self._gemini_model: Any | None = None
 
     async def load(self) -> None:
@@ -175,7 +177,7 @@ class OCREngine:
             logger.warning("의학용어 사전 파일 없음: %s", dict_path)
 
     async def _load_model(self) -> None:
-        """GLM-OCR 모델을 로드한다 (TensorRT FP16 최적화 대상)."""
+        """OCR provider를 로드한다."""
         loop = asyncio.get_running_loop()
         await loop.run_in_executor(None, self._load_model_sync)
 
@@ -187,11 +189,11 @@ class OCREngine:
         elif self._config.provider == "glmocr":
             self._load_glmocr_sdk()
         elif Path(self._config.model_path).exists():
-            logger.info("GLM-OCR 모델 로드: %s", self._config.model_path)
+            logger.info("OCR 모델 경로 확인: %s", self._config.model_path)
         else:
             logger.warning(
-                "GLM-OCR 모델 경로 없음: %s (스텁 모드로 동작)",
-                self._config.model_path,
+                "OCR provider=%s 로드 경로 없음 (스텁 모드로 동작)",
+                self._config.provider,
             )
         self._apply_turboquant_wrap()
 
@@ -205,16 +207,14 @@ class OCREngine:
             return
 
         try:
-            import google.generativeai as genai
+            from google import genai
         except Exception:
-            logger.exception(
-                "google-generativeai import 실패. `pip install google-generativeai` 필요"
-            )
+            logger.exception("google-genai import 실패. `pip install google-genai` 필요")
             return
 
-        genai.configure(api_key=api_key)
-        self._gemini_model = genai.GenerativeModel(self._config.gemini_model)
-        Path(self._config.glmocr_save_dir).mkdir(parents=True, exist_ok=True)
+        self._gemini_client = genai.Client(api_key=api_key)
+        self._gemini_model = self._config.gemini_model
+        Path(self._save_dir()).mkdir(parents=True, exist_ok=True)
         logger.info("Gemini OCR 로드 완료: model=%s", self._config.gemini_model)
 
     def _resolve_gemini_api_key(self) -> str:
@@ -222,6 +222,9 @@ class OCREngine:
         if yaml_key:
             return yaml_key
         return (os.environ.get(self._config.gemini_api_key_env) or "").strip()
+
+    def _save_dir(self) -> str:
+        return self._config.save_dir or self._config.glmocr_save_dir
 
     def _load_glmocr_sdk(self) -> None:
         """공식 glmocr SDK를 로드한다.
@@ -517,15 +520,10 @@ class OCREngine:
         return False
 
     # ------------------------------------------------------------------
-    # GLM-OCR 추론
+    # OCR 추론
     # ------------------------------------------------------------------
     def _run_ocr_inference(self, frame: np.ndarray) -> tuple[list[str], list[float]]:
-        """GLM-OCR 모델 추론.
-
-        provider=glmocr이면 공식 GLM-OCR SDK로 실제 OCR을 수행한다.
-        GLM-OCR 결과에는 confidence가 명시되지 않을 수 있으므로,
-        텍스트가 추출되면 0.95를 부여하고 후속 의학용어 매칭에서 보정한다.
-        """
+        """설정된 OCR provider로 텍스트를 추출한다."""
         if not self._model_loaded:
             logger.warning("OCR 모델 미로드 상태: 빈 결과 반환")
             return [], []
@@ -537,11 +535,11 @@ class OCREngine:
         if self._config.provider == "glmocr":
             return self._run_glmocr_sdk(frame)
 
-        logger.info("GLM-OCR 추론 실행 (스텁): frame shape=%s", frame.shape)
+        logger.info("OCR 추론 실행 (스텁): frame shape=%s", frame.shape)
         return [], []
 
     def _run_gemini_ocr(self, frame: np.ndarray) -> tuple[list[str], list[float]]:
-        if self._gemini_model is None:
+        if self._gemini_client is None or self._gemini_model is None:
             logger.error(
                 "Gemini OCR 모델이 준비되지 않음. %s 환경변수를 확인하세요.",
                 self._config.gemini_api_key_env,
@@ -554,7 +552,7 @@ class OCREngine:
             logger.exception("Pillow import 실패")
             return [], []
 
-        save_dir = Path(self._config.glmocr_save_dir)
+        save_dir = Path(self._save_dir())
         save_dir.mkdir(parents=True, exist_ok=True)
         image_path = save_dir / f"gemini_capture_{int(time.time() * 1000)}.jpg"
         inference_frame = self._prepare_frame_for_hf_ocr(frame)
@@ -592,15 +590,10 @@ class OCREngine:
         last_error: Exception | None = None
         for model_name in dict.fromkeys(models):
             try:
-                model = self._gemini_model
-                if model_name != self._config.gemini_model or model is None:
-                    import google.generativeai as genai
-
-                    model = genai.GenerativeModel(model_name)
-                response = model.generate_content([
-                    self._config.gemini_prompt,
-                    image,
-                ])
+                response = self._gemini_client.models.generate_content(
+                    model=model_name,
+                    contents=[self._config.gemini_prompt, image],
+                )
                 if model_name != self._config.gemini_model:
                     logger.info("Gemini OCR fallback 모델 사용: %s", model_name)
                 return (getattr(response, "text", "") or "").strip()

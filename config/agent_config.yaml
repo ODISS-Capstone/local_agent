@@ -25,8 +25,8 @@ capture:
     contrast: 0.2
 
 ocr:
-  model_path: "zai-org/GLM-OCR"
-  provider: "gemini_ocr"      # gemini_ocr | hf_glm_ocr | glmocr | stub
+  provider: "gemini_ocr"      # gemini_ocr | stub
+  save_dir: "runtime/ocr"
   gemini_model: "gemini-3-flash-preview"
   gemini_fallback_models:
     - "gemini-2.5-flash"
@@ -39,18 +39,6 @@ ocr:
     가능한 한 누락 없이 한국어 텍스트로 추출해 주세요.
     흐릿해서 확실하지 않은 글자는 추측하지 말고 [불명확]으로 표시해 주세요.
     표 구조는 Markdown 표로 유지해 주세요.
-  hf_device: "cuda"           # auto | cpu | cuda
-  hf_torch_dtype: "float16"   # auto | float16 | bfloat16 | float32
-  hf_prompt: "Text Recognition:"
-  hf_max_new_tokens: 256
-  hf_max_image_side: 1800
-  hf_extract_document: true   # 배경이 포함된 카메라 프레임에서 종이 영역 crop/warp
-  hf_repetition_penalty: 1.15
-  hf_no_repeat_ngram_size: 8
-  glmocr_mode: "maas"         # maas(Zhipu cloud) | selfhosted
-  glmocr_api_key_env: "ZHIPU_API_KEY"
-  glmocr_timeout_sec: 600
-  glmocr_save_dir: "runtime/ocr"
   confidence_threshold: 0.85
   fuzzy_match_max_distance: 2
   medical_dict_path: "config/medical_terms.json"
