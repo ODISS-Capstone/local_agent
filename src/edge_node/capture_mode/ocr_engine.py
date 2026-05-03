@@ -806,20 +806,27 @@ class OCREngine:
 
     def _is_repetitive_text(self, text: str) -> bool:
         tokens = [tok for tok in text.replace("\n", " ").split(" ") if tok]
-        if len(tokens) >= 12:
-            most_common = max(tokens.count(tok) for tok in set(tokens))
-            if most_common / len(tokens) > 0.45:
+        meaningful_tokens = [
+            tok
+            for tok in tokens
+            if len(tok.strip("[]*.,:;()")) >= 2 and "불명확" not in tok
+        ]
+        if len(meaningful_tokens) >= 12:
+            most_common = max(
+                meaningful_tokens.count(tok) for tok in set(meaningful_tokens)
+            )
+            if most_common >= 8 and most_common / len(meaningful_tokens) > 0.45:
                 return True
 
-        compact = "".join(text.split())
-        if len(compact) < 40:
-            return False
-        for n in range(3, 9):
-            chunks = [compact[i:i + n] for i in range(0, len(compact) - n + 1, n)]
-            if not chunks:
-                continue
-            most_common = max(chunks.count(chunk) for chunk in set(chunks))
-            if most_common >= 6:
+        adjacent_repeats = 1
+        previous = None
+        for token in meaningful_tokens:
+            if token == previous:
+                adjacent_repeats += 1
+            else:
+                adjacent_repeats = 1
+                previous = token
+            if adjacent_repeats >= 6:
                 return True
         return False
 
