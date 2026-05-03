@@ -100,7 +100,10 @@ class OCREngineConfig:
     hf_extract_document: bool = True
     hf_repetition_penalty: float = 1.15
     hf_no_repeat_ngram_size: int = 8
-    gemini_model: str = "gemini-3-flash"
+    gemini_model: str = "gemini-3-flash-preview"
+    gemini_fallback_models: list[str] = field(
+        default_factory=lambda: ["gemini-2.5-flash", "gemini-flash-latest"]
+    )
     gemini_api_key: str = ""
     gemini_api_key_env: str = "GEMINI_API_KEY"
     gemini_prompt: str = (
@@ -570,15 +573,9 @@ class OCREngine:
             inference_frame.shape,
             self._config.gemini_model,
         )
-        try:
-            img = Image.open(image_path).convert("RGB")
-            response = self._gemini_model.generate_content([
-                self._config.gemini_prompt,
-                img,
-            ])
-            text = (getattr(response, "text", "") or "").strip()
-        except Exception:
-            logger.exception("Gemini OCR 추론 실패")
+        img = Image.open(image_path).convert("RGB")
+        text = self._generate_gemini_content(img)
+        if text is None:
             return [], []
 
         if not text:
@@ -593,6 +590,29 @@ class OCREngine:
             lines = [text]
         logger.info("Gemini OCR 텍스트 추출 성공: %d lines", len(lines))
         return lines, [0.95] * len(lines)
+
+    def _generate_gemini_content(self, image: Any) -> str | None:
+        models = [self._config.gemini_model, *self._config.gemini_fallback_models]
+        last_error: Exception | None = None
+        for model_name in dict.fromkeys(models):
+            try:
+                model = self._gemini_model
+                if model_name != self._config.gemini_model or model is None:
+                    import google.generativeai as genai
+
+                    model = genai.GenerativeModel(model_name)
+                response = model.generate_content([
+                    self._config.gemini_prompt,
+                    image,
+                ])
+                if model_name != self._config.gemini_model:
+                    logger.info("Gemini OCR fallback 모델 사용: %s", model_name)
+                return (getattr(response, "text", "") or "").strip()
+            except Exception as exc:  # noqa: BLE001
+                last_error = exc
+                logger.warning("Gemini OCR 모델 실패: %s (%s)", model_name, exc)
+        logger.exception("Gemini OCR 추론 실패", exc_info=last_error)
+        return None
 
     def _run_hf_glm_ocr(self, frame: np.ndarray) -> tuple[list[str], list[float]]:
         if self._hf_processor is None or self._hf_model is None:

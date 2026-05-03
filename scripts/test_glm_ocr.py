@@ -93,7 +93,11 @@ async def run(args: argparse.Namespace) -> None:
         hf_extract_document=ocr_cfg.get("hf_extract_document", True),
         hf_repetition_penalty=ocr_cfg.get("hf_repetition_penalty", 1.15),
         hf_no_repeat_ngram_size=ocr_cfg.get("hf_no_repeat_ngram_size", 8),
-        gemini_model=ocr_cfg.get("gemini_model", "gemini-3-flash"),
+        gemini_model=ocr_cfg.get("gemini_model", "gemini-3-flash-preview"),
+        gemini_fallback_models=ocr_cfg.get(
+            "gemini_fallback_models",
+            ["gemini-2.5-flash", "gemini-flash-latest"],
+        ),
         gemini_api_key=ocr_cfg.get("gemini_api_key", ""),
         gemini_api_key_env=ocr_cfg.get("gemini_api_key_env", "GEMINI_API_KEY"),
         gemini_prompt=ocr_cfg.get("gemini_prompt", ""),
