@@ -24,16 +24,15 @@ from __future__ import annotations
 import asyncio
 import logging
 import signal
-from pathlib import Path
 from typing import Any
 
-import yaml
-
+from src.config_loader import load_config
 from src.home_environment.cam import Cam, CamConfig
 from src.home_environment.speaker import LocalSpeaker
-from src.edge_node.vad import StubVAD
-from src.edge_node.stt import StubSTT, TranscriptionResult
-from src.edge_node.tts import StubTTS, TTSPriority
+from src.edge_node.vad import StubVAD, PipelineVAD
+from src.edge_node.stt import StubSTT, PipelineSTT, TranscriptionResult
+from src.edge_node.tts import StubTTS, GTTSEngine, TTSPriority
+from src.edge_node.audio_pipeline import AudioPipeline, AudioPipelineConfig
 from src.edge_node.wait_ux import WaitUX
 from src.edge_node.capture_mode.buffer import Buffer, QualityConfig, QualityFailReason
 from src.edge_node.capture_mode.timer import Timer
@@ -57,15 +56,6 @@ logger = logging.getLogger(__name__)
 CAPTURE_TRIGGER_KEYWORDS = ["약 가져왔어", "약 찍어", "약 보여줄게", "사진 찍어"]
 
 
-def load_config(path: str = "config/agent_config.yaml") -> dict[str, Any]:
-    config_path = Path(path)
-    if config_path.exists():
-        with open(config_path, encoding="utf-8") as f:
-            return yaml.safe_load(f) or {}
-    logger.warning("설정 파일 없음: %s, 기본값 사용", path)
-    return {}
-
-
 class LocalAgent:
     """mermaid 아키텍처에 따른 로컬 에이전트 오케스트레이터.
 
@@ -84,12 +74,63 @@ class LocalAgent:
             reconnect_backoff_sec=rtsp_cfg.get("reconnect_backoff_sec", 2.0),
             max_reconnect_attempts=rtsp_cfg.get("max_reconnect_attempts", 10),
         ))
-        self.speaker = LocalSpeaker()
+        audio_cfg = cfg.get("audio", {})
+        self.speaker = LocalSpeaker(
+            device=audio_cfg.get("output_device", "default"),
+            sample_rate=audio_cfg.get("sample_rate", 22050),
+            channels=audio_cfg.get("channels", 1),
+        )
 
         # --- Edge_Node 노드 ---
-        self.vad = StubVAD()
-        self.stt = StubSTT()
-        self.tts = StubTTS()
+        stt_cfg = cfg.get("stt", {})
+        if stt_cfg.get("enabled", False):
+            pipeline_cfg = AudioPipelineConfig(
+                input_device=stt_cfg.get(
+                    "input_device", audio_cfg.get("input_device", "default")
+                ),
+                sample_rate=stt_cfg.get("sample_rate", 16000),
+                frame_ms=stt_cfg.get("frame_ms", 30),
+                vad_aggressiveness=stt_cfg.get("vad_aggressiveness", 2),
+                silence_tail_ms=stt_cfg.get("silence_tail_ms", 700),
+                min_utterance_ms=stt_cfg.get("min_utterance_ms", 300),
+                max_utterance_ms=stt_cfg.get("max_utterance_ms", 12000),
+                whisper_model=stt_cfg.get("whisper_model", "small"),
+                whisper_compute_type=stt_cfg.get("whisper_compute_type", "int8"),
+                whisper_device=stt_cfg.get("whisper_device", "cpu"),
+                language=stt_cfg.get("language", "ko"),
+                initial_prompt=stt_cfg.get(
+                    "initial_prompt",
+                    "오디스, 약, 처방전, 복용, 어르신, 사진, 찍어, 가져왔어",
+                ),
+            )
+            self.audio_pipeline: AudioPipeline | None = AudioPipeline(pipeline_cfg)
+            self.vad = PipelineVAD(self.audio_pipeline)
+            self.stt = PipelineSTT(self.audio_pipeline)
+            logger.info("STT 모드: 실제 마이크 + faster-whisper")
+        else:
+            self.audio_pipeline = None
+            self.vad = StubVAD()
+            self.stt = StubSTT()
+            logger.info("STT 모드: Stub (시뮬레이션)")
+
+        tts_cfg = cfg.get("tts", {})
+        if tts_cfg.get("enabled", False) and tts_cfg.get("engine", "gtts") == "gtts":
+            self.tts = GTTSEngine(
+                speaker=self.speaker,
+                lang=tts_cfg.get("lang", "ko"),
+                tld=tts_cfg.get("tld", "co.kr"),
+                slow=tts_cfg.get("slow", False),
+                sample_rate=tts_cfg.get("sample_rate", 22050),
+                channels=tts_cfg.get("channels", 1),
+            )
+            logger.info(
+                "TTS 모드: gTTS (lang=%s tld=%s)",
+                tts_cfg.get("lang", "ko"),
+                tts_cfg.get("tld", "co.kr"),
+            )
+        else:
+            self.tts = StubTTS()
+            logger.info("TTS 모드: Stub (로그 출력만)")
 
         quality_cfg = cfg.get("quality", {})
         self.buffer = Buffer(
@@ -112,6 +153,23 @@ class LocalAgent:
         ocr_cfg = cfg.get("ocr", {})
         self.ocr_engine = OCREngine(OCREngineConfig(
             model_path=ocr_cfg.get("model_path", "models/glm-ocr"),
+            provider=ocr_cfg.get("provider", "stub"),
+            hf_device=ocr_cfg.get("hf_device", "auto"),
+            hf_torch_dtype=ocr_cfg.get("hf_torch_dtype", "auto"),
+            hf_prompt=ocr_cfg.get("hf_prompt", "Text Recognition:"),
+            hf_max_new_tokens=ocr_cfg.get("hf_max_new_tokens", 4096),
+            hf_max_image_side=ocr_cfg.get("hf_max_image_side", 1280),
+            hf_extract_document=ocr_cfg.get("hf_extract_document", True),
+            hf_repetition_penalty=ocr_cfg.get("hf_repetition_penalty", 1.15),
+            hf_no_repeat_ngram_size=ocr_cfg.get("hf_no_repeat_ngram_size", 8),
+            gemini_model=ocr_cfg.get("gemini_model", "gemini-3-flash"),
+            gemini_api_key=ocr_cfg.get("gemini_api_key", ""),
+            gemini_api_key_env=ocr_cfg.get("gemini_api_key_env", "GEMINI_API_KEY"),
+            gemini_prompt=ocr_cfg.get("gemini_prompt", ""),
+            glmocr_mode=ocr_cfg.get("glmocr_mode", "maas"),
+            glmocr_api_key_env=ocr_cfg.get("glmocr_api_key_env", "ZHIPU_API_KEY"),
+            glmocr_timeout_sec=ocr_cfg.get("glmocr_timeout_sec", 600),
+            glmocr_save_dir=ocr_cfg.get("glmocr_save_dir", "runtime/ocr"),
             confidence_threshold=ocr_cfg.get("confidence_threshold", 0.85),
             fuzzy_match_max_distance=ocr_cfg.get("fuzzy_match_max_distance", 2),
             medical_dict_path=ocr_cfg.get("medical_dict_path", "config/medical_terms.json"),
@@ -139,6 +197,8 @@ class LocalAgent:
         logger.info("=== 로컬 에이전트 시작 ===")
 
         await self.ocr_engine.load()
+        if self.audio_pipeline is not None:
+            await self.audio_pipeline.start()
         await self.vad.start()
         await self.stt.start_stream()
 
@@ -352,6 +412,8 @@ class LocalAgent:
         self.buffer.deactivate()
         await self.vad.stop()
         await self.stt.stop_stream()
+        if self.audio_pipeline is not None:
+            await self.audio_pipeline.stop()
         await self.tts.stop()
         await self.cam.close()
 

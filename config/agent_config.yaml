@@ -1,5 +1,12 @@
 rtsp:
-  url: "rtsp://192.168.0.100:554/stream"
+  # ipTIME C500G (192.168.0.75:554)
+  # 카메라 펌웨어가 광고하는 /stream_ch0 path는 SETUP을 거부한다.
+  # ONVIF GetStreamUri로 발급받은 path만 SETUP을 통과한다.
+  #   MainStream(2880x1620): /onvif1
+  #   SubStream(640x368):    /onvif2
+  # 실제 ID/PW 포함 URL은 .env의 RTSP_URL에 둔다.
+  # 자격/path 갱신은 scripts/probe_onvif.py 로 다시 확인 가능.
+  url: "${RTSP_URL}"
   buffer_size: 30
   reconnect_backoff_sec: 2.0
   max_reconnect_attempts: 10
@@ -18,7 +25,29 @@ capture:
     contrast: 0.2
 
 ocr:
-  model_path: "models/glm-ocr"
+  model_path: "zai-org/GLM-OCR"
+  provider: "gemini_ocr"      # gemini_ocr | hf_glm_ocr | glmocr | stub
+  gemini_model: "gemini-3-flash"
+  gemini_api_key: ""
+  gemini_api_key_env: "GEMINI_API_KEY"
+  gemini_prompt: |
+    이 이미지는 병원 진료비 세부내역서 또는 처방전/약봉투입니다.
+    표 형식으로 되어 있는 모든 항목(코드, 명칭, 금액, 약품명, 용법, 투약일수 등)을
+    가능한 한 누락 없이 한국어 텍스트로 추출해 주세요.
+    흐릿해서 확실하지 않은 글자는 추측하지 말고 [불명확]으로 표시해 주세요.
+    표 구조는 Markdown 표로 유지해 주세요.
+  hf_device: "cuda"           # auto | cpu | cuda
+  hf_torch_dtype: "float16"   # auto | float16 | bfloat16 | float32
+  hf_prompt: "Text Recognition:"
+  hf_max_new_tokens: 256
+  hf_max_image_side: 1800
+  hf_extract_document: true   # 배경이 포함된 카메라 프레임에서 종이 영역 crop/warp
+  hf_repetition_penalty: 1.15
+  hf_no_repeat_ngram_size: 8
+  glmocr_mode: "maas"         # maas(Zhipu cloud) | selfhosted
+  glmocr_api_key_env: "ZHIPU_API_KEY"
+  glmocr_timeout_sec: 600
+  glmocr_save_dir: "runtime/ocr"
   confidence_threshold: 0.85
   fuzzy_match_max_distance: 2
   medical_dict_path: "config/medical_terms.json"
@@ -34,6 +63,39 @@ cloud:
 
 wait_ux:
   waiting_escalation_intervals_sec: [3, 7, 15]
+
+audio:
+  # Jabra SPEAK 510 USB (lsusb: 0b0e:0422, ALSA: card 2 [USB])
+  output_device: "plughw:CARD=USB,DEV=0"
+  input_device: "plughw:CARD=USB,DEV=0"
+  sample_rate: 22050   # speaker 출력 샘플레이트
+  channels: 1
+
+tts:
+  # 실제 음성 합성 여부. false면 StubTTS (로그만)
+  enabled: true
+  engine: "gtts"   # gtts | stub
+  lang: "ko"
+  tld: "co.kr"     # 한국어 발음/억양 안정. 다른 옵션: com / com.au
+  slow: false
+  sample_rate: 22050
+  channels: 1
+
+stt:
+  # 실제 마이크 + Whisper 사용 여부. false면 StubVAD/StubSTT 사용
+  enabled: true
+  input_device: "plughw:CARD=USB,DEV=0"
+  sample_rate: 16000           # webrtcvad/whisper 표준
+  frame_ms: 30                 # 10/20/30 만 허용
+  vad_aggressiveness: 2        # 0~3
+  silence_tail_ms: 700
+  min_utterance_ms: 300
+  max_utterance_ms: 12000
+  whisper_model: "small"       # tiny / base / small / medium / large-v3
+  whisper_compute_type: "int8" # cpu/jetson 권장
+  whisper_device: "cpu"        # cuda 가능 시 변경
+  language: "ko"
+  initial_prompt: "오디스, 약, 처방전, 복용, 어르신, 사진, 찍어, 가져왔어"
 
 turboquant:
   auto_wrap: true

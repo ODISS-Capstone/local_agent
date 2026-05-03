@@ -81,3 +81,29 @@ class StubSTT(STT):
 
     async def simulate_input(self, text: str, confidence: float = 0.95) -> None:
         await self._queue.put(TranscriptionResult(text=text, confidence=confidence))
+
+
+class PipelineSTT(STT):
+    """`AudioPipeline`이 발행한 transcription을 소비하는 STT 어댑터.
+
+    실제 STT는 AudioPipeline 내부의 Whisper가 수행하고,
+    이 클래스는 큐에서 결과를 꺼내 기존 인터페이스로 노출한다.
+    """
+
+    def __init__(self, pipeline: "object") -> None:  # AudioPipeline (forward ref)
+        self._pipeline = pipeline
+        self._running = False
+
+    async def start_stream(self) -> None:
+        self._running = True
+        logger.info("PipelineSTT 스트리밍 시작")
+
+    async def stop_stream(self) -> None:
+        self._running = False
+        logger.info("PipelineSTT 스트리밍 중단")
+
+    async def get_transcription(self) -> TranscriptionResult:
+        return await self._pipeline.transcription_queue.get()
+
+    async def transcribe_audio(self, audio_data: bytes) -> TranscriptionResult:
+        return TranscriptionResult(text="", confidence=0.0, is_final=True)

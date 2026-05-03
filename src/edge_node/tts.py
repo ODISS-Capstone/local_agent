@@ -1,5 +1,5 @@
 """
-TTS [대화형 TTS 모델: Qwen3-TTS]
+TTS [대화형 TTS 모델]
 
 mermaid 노드: TTS
 mermaid 엣지:
@@ -9,15 +9,25 @@ mermaid 엣지:
   - OCR_Engine --실패--> Wait_UX --> TTS -- "약봉투 다시..." --> Speaker
   - TTS -- "즉시 응답 (네 어르신 말씀해주세요!)" --> Speaker
   - TTS -- "에이전트: 어르신, XX약은 녹용이랑 드시면 안되요~" --> Speaker
+
+설계 노트:
+  Qwen3-TTS는 0.9B BF16 + flash_attention_2 요구 + ~2GB 메모리로
+  Jetson Orin Nano 8GB에서는 실용성이 낮다. 동일한 한국어 여성 음색을
+  내기 위해 gTTS(Google Text-to-Speech)를 기본 RealTTS로 사용한다.
+  추후 로컬 모델(MeloTTS / Piper 호환 ko 모델 등) 교체가 쉽도록
+  Speaker 인터페이스에 PCM bytes만 전달한다.
 """
 
 from __future__ import annotations
 
 import asyncio
+import io
 import logging
+import subprocess
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from enum import IntEnum
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -85,3 +95,89 @@ class StubTTS(TTS):
     @property
     def output_log(self) -> list[TTSRequest]:
         return self._output_log
+
+
+class GTTSEngine(TTS):
+    """gTTS(Google Text-to-Speech) 기반 실제 TTS 구현.
+
+    - text -> mp3(in-memory) -> sox로 PCM(S16_LE) 디코딩 -> Speaker.play()
+    - sox에 mp3 디코더(libsox-fmt-mp3)가 설치되어 있어야 한다.
+    - Speaker는 LocalSpeaker(또는 동일 인터페이스) 인스턴스를 주입.
+    """
+
+    def __init__(
+        self,
+        speaker: Any,
+        lang: str = "ko",
+        tld: str = "co.kr",
+        slow: bool = False,
+        sample_rate: int = 22050,
+        channels: int = 1,
+    ) -> None:
+        self._speaker = speaker
+        self._lang = lang
+        self._tld = tld
+        self._slow = slow
+        self._sample_rate = sample_rate
+        self._channels = channels
+        self._stop_flag = False
+
+    async def synthesize(self, text: str) -> bytes:
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(None, self._synthesize_sync, text)
+
+    def _synthesize_sync(self, text: str) -> bytes:
+        from gtts import gTTS  # lazy
+
+        buf = io.BytesIO()
+        tts = gTTS(text=text, lang=self._lang, tld=self._tld, slow=self._slow)
+        tts.write_to_fp(buf)
+        mp3_bytes = buf.getvalue()
+
+        proc = subprocess.run(
+            [
+                "sox",
+                "-t", "mp3", "-",
+                "-t", "raw",
+                "-r", str(self._sample_rate),
+                "-c", str(self._channels),
+                "-e", "signed-integer",
+                "-b", "16",
+                "-",
+            ],
+            input=mp3_bytes,
+            capture_output=True,
+            check=False,
+        )
+        if proc.returncode != 0:
+            logger.error(
+                "sox mp3->pcm 디코딩 실패 (rc=%d): %s",
+                proc.returncode,
+                proc.stderr.decode(errors="replace")[:300],
+            )
+            return b""
+        return proc.stdout
+
+    async def speak(self, text: str, priority: TTSPriority = TTSPriority.NORMAL) -> None:
+        if not text:
+            return
+        self._stop_flag = False
+        logger.info("GTTSEngine speak [%s]: %s", priority.name, text)
+        try:
+            pcm = await self.synthesize(text)
+        except Exception:
+            logger.exception("TTS 합성 실패")
+            return
+        if not pcm or self._stop_flag:
+            return
+        try:
+            await self._speaker.play(pcm)
+        except Exception:
+            logger.exception("Speaker 재생 실패")
+
+    async def stop(self) -> None:
+        self._stop_flag = True
+        try:
+            await self._speaker.stop()
+        except Exception:
+            pass

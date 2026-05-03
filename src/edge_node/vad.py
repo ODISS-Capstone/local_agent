@@ -75,3 +75,26 @@ class StubVAD(VAD):
 
     async def simulate_wakeword(self, keyword: str = "오디스야") -> None:
         await self._queue.put(WakeWordResult(detected=True, keyword=keyword, confidence=1.0))
+
+
+class PipelineVAD(VAD):
+    """`AudioPipeline`이 발행한 wake-word 이벤트를 소비하는 VAD 어댑터.
+
+    실제 마이크 캡처/세그먼테이션은 AudioPipeline이 수행하고,
+    이 클래스는 큐에서 이벤트를 꺼내 인터페이스로 노출한다.
+    """
+
+    def __init__(self, pipeline: "object") -> None:  # AudioPipeline (forward ref)
+        self._pipeline = pipeline
+        self._running = False
+
+    async def start(self) -> None:
+        self._running = True
+        logger.info("PipelineVAD 시작")
+
+    async def stop(self) -> None:
+        self._running = False
+        logger.info("PipelineVAD 중단")
+
+    async def wait_for_wakeword(self) -> WakeWordResult:
+        return await self._pipeline.wake_queue.get()

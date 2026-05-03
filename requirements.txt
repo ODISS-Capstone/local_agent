@@ -1,7 +1,22 @@
-opencv-python>=4.9.0
-numpy>=1.24.0
+opencv-python==4.10.0.84
+numpy<2
 aiohttp>=3.9.0
 pydantic>=2.5.0
 rapidfuzz>=3.6.0
 PyYAML>=6.0.1
+python-dotenv>=1.0.0
 Pillow>=10.0.0
+webrtcvad>=2.0.10
+faster-whisper>=1.0.0
+gTTS>=2.5.0
+onvif-zeep>=0.2.12
+glmocr>=0.1.5
+accelerate>=0.30.0
+safetensors>=0.4.0
+scipy>=1.14.0
+sentencepiece>=0.2.0
+protobuf>=4.25.0
+torch @ https://pypi.jetson-ai-lab.io/jp6/cu126/%2Bf/62a/1beee9f2f1470/torch-2.8.0-cp310-cp310-linux_aarch64.whl
+torchvision @ https://pypi.jetson-ai-lab.io/jp6/cu126/%2Bf/907/c4c1933789645/torchvision-0.23.0-cp310-cp310-linux_aarch64.whl
+git+https://github.com/huggingface/transformers.git
+google-generativeai>=0.8.0
