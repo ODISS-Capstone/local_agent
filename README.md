@@ -287,3 +287,16 @@ User --(음성)--> STT --> VAD --> Wait_UX --> TTS --> Speaker
 pip install -r requirements.txt
 python -m src.main
 ```
+
+## CI 품질 게이트
+
+`local_agent/.github/workflows/ci.yml`의 `mock` job은 아래 하드 게이트를 수행한다.
+
+- 모듈 컴파일: `python -m compileall src`
+- 설정/상태머신 스모크: `StateMachine`, `WaitUX` 검증
+- 클라우드 계약 게이트: `pytest -q tests/test_contract_payloads.py`
+- TurboQuant 런타임 계약 게이트: `pytest -q tests/test_turboquant_runtime_contract.py`
+- 일반 테스트가 존재하면 `pytest -q` 전체 실행
+
+Jetson 배포 전 하드웨어 게이트는
+`local_agent/.github/workflows/jetson-deploy.yml`의 `jetson-smoke` job에서 수행한다.

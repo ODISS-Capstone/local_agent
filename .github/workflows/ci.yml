@@ -73,6 +73,12 @@ jobs:
             echo "No pytest tests found; compile and smoke checks completed."
           fi
 
+      - name: Enforce cloud/runtime contract gates
+        run: |
+          pytest -q \
+            tests/test_contract_payloads.py \
+            tests/test_turboquant_runtime_contract.py
+
       - name: TurboQuant auto-wrap smoke (CPU)
         env:
           TURBOQUANT_AUTO_WRAP: "1"
